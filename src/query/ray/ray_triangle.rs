@@ -131,42 +131,35 @@ pub(crate) fn local_ray_intersection_with_triangle_within(
     //
     let e = -ray.dir.cross(ap);
 
-    let mut v;
-    let mut w;
-    let time_of_impact;
-    let normal;
-
-    if t < 0.0 {
-        v = -ac.dot(e);
+    let (mut v, mut w, time_of_impact, normal) = if t < 0.0 {
+        let v = -ac.dot(e);
 
         if v < -margin || v > d + margin {
             return None;
         }
 
-        w = ab.dot(e);
+        let w = ab.dot(e);
 
         if w < -margin || v + w > d + margin {
             return None;
         }
 
-        time_of_impact = -t * (1.0 / d);
-        normal = -n.normalize();
+        (v, w, -t * (1.0 / d), -n.normalize())
     } else {
-        v = ac.dot(e);
+        let v = ac.dot(e);
 
         if v < -margin || v > d + margin {
             return None;
         }
 
-        w = -ab.dot(e);
+        let w = -ab.dot(e);
 
         if w < -margin || v + w > d + margin {
             return None;
         }
 
-        time_of_impact = t * (1.0 / d);
-        normal = n.normalize();
-    }
+        (v, w, t * (1.0 / d), n.normalize())
+    };
 
     let inside = v >= 0.0 && w >= 0.0 && v + w <= d;
     let invd = 1.0 / d;
