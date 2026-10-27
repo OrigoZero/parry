@@ -300,3 +300,86 @@ fn a_ray_along_an_axis_meets_a_triangle_whose_box_ends_a_hair_beyond_it() {
         );
     }
 }
+
+/// A flat grid of `cells` by `cells` unit squares in the plane y = 0, each split into two
+/// triangles along the same diagonal, the way a road deck, a floor or a terrain tile is
+/// triangulated as strips. Every vertex sits on whole coordinates, so the grid lines lie on the
+/// faces of the triangles' bounding boxes.
+fn flat_strip_grid(cells: u32) -> TriMesh {
+    let mut vertices = vec![];
+    for j in 0..=cells {
+        for i in 0..=cells {
+            vertices.push(Vector::new(i as Real, 0.0, j as Real));
+        }
+    }
+    let mut indices = vec![];
+    for j in 0..cells {
+        for i in 0..cells {
+            let a = j * (cells + 1) + i;
+            let b = a + 1;
+            let c = a + cells + 1;
+            let d = c + 1;
+            indices.push([a, c, b]);
+            indices.push([b, c, d]);
+        }
+    }
+    TriMesh::new(vertices, indices).unwrap()
+}
+
+#[test]
+fn a_tilted_ray_through_a_grid_line_or_vertex_hits_a_flat_strip_grid() {
+    // A ray tilted off the vertical, as a wheel's suspension ray is on a car that rolls or pitches,
+    // crossing a flat grid on one of its grid lines, diagonals or vertices meets the grid there.
+    // Each triangle's box has no thickness, so such a ray enters the box's y slab at the same
+    // distance at which it reaches the box face the grid line lies on, and both query paths
+    // (with and without the normal) must still reach a triangle holding that point.
+    let cells = 8;
+    let grid = flat_strip_grid(cells);
+    let mut rng = Lcg(0x2134_7f00_d1ce_0001);
+    for pose in [
+        Pose::IDENTITY,
+        Pose::from_translation(Vector::new(100.5, 3.25, -40.0)),
+    ] {
+        for max_tilt in [0.02, 0.3, 1.2] {
+            let mut missed = vec![];
+            for k in 0..4000 {
+                let line = rng.in_range(1.0, (cells - 1) as Real).floor();
+                let other = rng.in_range(1.0, (cells - 1) as Real).floor();
+                let along = rng.in_range(0.5, cells as Real - 0.5);
+                let (x, z) = match k % 4 {
+                    0 => (line, along),
+                    1 => (along, line),
+                    2 => {
+                        let s = rng.next();
+                        (line + s, other + 1.0 - s)
+                    }
+                    _ => (line, other),
+                };
+                let angle = rng.in_range(0.0, core::f64::consts::TAU as Real);
+                let tilt = rng.in_range(0.0, max_tilt);
+                let mut dir = Vector::new(
+                    tilt.sin() * angle.cos(),
+                    -tilt.cos(),
+                    tilt.sin() * angle.sin(),
+                );
+                if k % 2 == 1 {
+                    dir = -dir;
+                }
+                let target = pose * Vector::new(x, 0.0, z);
+                let ray = Ray::new(target - dir * 5.0, dir);
+                let plain = grid.cast_ray(&pose, &ray, 10.0, true);
+                let with_normal = grid.cast_ray_and_get_normal(&pose, &ray, 10.0, true);
+                if plain.is_none() || with_normal.is_none() {
+                    missed.push((x, z, dir, plain, with_normal.map(|hit| hit.time_of_impact)));
+                }
+            }
+            assert!(
+                missed.is_empty(),
+                "pose {:?}, tilt up to {max_tilt}: {} of 4000 rays missed, first {:?}",
+                pose.translation,
+                missed.len(),
+                missed.first(),
+            );
+        }
+    }
+}

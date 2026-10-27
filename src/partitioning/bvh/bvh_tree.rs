@@ -1,8 +1,8 @@
 use super::bvh_optimize::BvhIncrementalOptimizationState;
 use super::BvhOptimizationHeapEntry;
 use crate::bounding_volume::{Aabb, BoundingVolume};
-use crate::math::{Real, Vector};
-use crate::query::{Ray, RayCast};
+use crate::math::{Real, Vector, VectorExt, DIM};
+use crate::query::Ray;
 use crate::utils::VecMap;
 use alloc::collections::{BinaryHeap, VecDeque};
 use alloc::vec::Vec;
@@ -1160,6 +1160,12 @@ impl BvhNode {
     /// - The time of impact if the ray hits the AABB within `max_toi`
     /// - `Real::MAX` if there is no hit or the hit is beyond `max_toi`
     ///
+    /// The test is conservative under rounding: a ray that meets the box, its faces, edges and
+    /// corners included, is never refused, and a ray passing outside the box by no more than
+    /// the rounding of the test may be accepted. A ray crossing a mesh at a point on the face
+    /// of a triangle's box (an edge or vertex several triangles share, on a flat or
+    /// axis-aligned mesh) therefore reaches every triangle holding that point.
+    ///
     /// # Example
     ///
     /// ```
@@ -1185,9 +1191,28 @@ impl BvhNode {
     /// - [`Ray`] - Ray structure
     /// - [`Bvh::traverse`] - For traversing the full BVH with ray casts
     pub fn cast_ray(&self, ray: &Ray, max_toi: Real) -> Real {
-        self.aabb()
-            .cast_local_ray(ray, max_toi, true)
-            .unwrap_or(Real::MAX)
+        let mut tmin: Real = 0.0;
+        let mut tmax: Real = max_toi;
+
+        for i in 0..DIM {
+            let origin = ray.origin.vget(i);
+            let inv_dir = 1.0 / ray.dir.vget(i);
+            if inv_dir.is_finite() {
+                let t1 = (self.mins.vget(i) - origin) * inv_dir;
+                let t2 = (self.maxs.vget(i) - origin) * inv_dir;
+                tmin = tmin.max(t1.min(t2));
+                tmax = tmax.min(t1.max(t2));
+            } else if origin < self.mins.vget(i) || origin > self.maxs.vget(i) {
+                // The ray does not travel along this axis and stays outside the slab.
+                return Real::MAX;
+            }
+        }
+
+        if tmin <= tmax * RAY_SLAB_EXIT_SLACK {
+            tmin
+        } else {
+            Real::MAX
+        }
     }
 
     /// Casts a ray on this AABB, with SIMD optimizations.
@@ -1216,13 +1241,31 @@ impl BvhNode {
         let tmin_n = tmin.max_element(); // tmin[0].max(tmin[1].max(tmin[2]));
         let tmax_n = tmax.min_element(); // tmax[0].min(tmax[1].min(tmax[2]));
 
-        if tmax_n >= tmin_n && tmax_n >= 0.0 {
+        if tmax_n * RAY_SLAB_EXIT_SLACK >= tmin_n && tmax_n >= 0.0 {
             tmin_n
         } else {
             f32::MAX
         }
     }
 }
+
+/// The factor a node's ray test scales the distance at which the ray leaves the box by before
+/// comparing it with the distance at which it enters, so the test never refuses a ray that meets
+/// the box.
+///
+/// Each slab distance `(bound - origin) * (1 / dir)` is computed with three roundings, so it lies
+/// within `γ₃ = 3u / (1 - 3u)` of its exact value, `u` being the unit roundoff (`EPSILON / 2`).
+/// A ray that meets the box has an exact entry distance no larger than its exact exit distance,
+/// and after rounding the entry can exceed the exit by up to `(1 + γ₃) / (1 - γ₃)`, times one more
+/// rounding for the scaling itself: just under `1 + 7u`. `1 + 4 * EPSILON` is `1 + 8u`. This is the
+/// bound Pharr, Jakob and Humphreys derive for a robust ray-box test ("Physically Based
+/// Rendering", 3rd ed., section 3.9.2), with the margin for the scaling's own rounding.
+///
+/// A ray crossing a flat mesh at a point on the face of a triangle's box (an edge or vertex the
+/// triangle shares) enters the box's zero-thickness slab at the same distance as it leaves
+/// another slab, and the slack keeps rounding from ordering those two distances the wrong way in
+/// the box of every triangle holding that point.
+const RAY_SLAB_EXIT_SLACK: Real = 1.0 + 4.0 * Real::EPSILON;
 
 /// An index identifying a single BVH tree node.
 ///
