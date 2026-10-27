@@ -1,6 +1,7 @@
 // A ray cast onto a heightfield hits it wherever it crosses the surface, including a ray running
 // along a cell edge, through a grid vertex, along the field's outer border, and a ray reaching the
-// field through a pose that rounds it onto such a line.
+// field through a pose that rounds it onto such a line. A ray holding a coordinate that is not
+// finite hits nothing.
 //
 // Every field here samples a plane, so the surface a ray must hit is known in closed form and the
 // expected answer does not depend on the triangle test under examination.
@@ -200,4 +201,45 @@ fn a_ray_cast_down_onto_a_turned_heightfield_hits_it_at_its_cell_edges() {
         misses.is_empty(),
         "rays that missed the turned field: {misses:?}"
     );
+}
+
+#[test]
+fn a_ray_holding_a_coordinate_that_is_not_finite_misses_a_heightfield() {
+    // The rays would hit the field if each coordinate that is not finite were a finite number.
+    let plane = (0.05, -0.03, 2.0);
+    let field = planar_field(17, Vector::new(16.0, 1.0, 16.0), plane);
+    let (nan, inf) = (Real::NAN, Real::INFINITY);
+
+    let rays = [
+        (Vector::new(nan, 10.0, 0.3), Vector::new(0.3, -1.0, 0.2)),
+        (Vector::new(0.3, nan, 0.3), Vector::new(0.3, -1.0, 0.2)),
+        (Vector::new(0.3, 10.0, nan), Vector::new(0.3, -1.0, 0.2)),
+        (Vector::new(nan, 10.0, 0.3), Vector::new(0.0, -1.0, 0.0)),
+        (Vector::new(0.3, 10.0, nan), Vector::new(0.0, -1.0, 0.0)),
+        (Vector::new(0.3, 10.0, 0.3), Vector::new(nan, -1.0, 0.2)),
+        (Vector::new(0.3, 10.0, 0.3), Vector::new(0.3, nan, 0.2)),
+        (Vector::new(0.3, 10.0, 0.3), Vector::new(0.3, -1.0, nan)),
+        (Vector::new(-inf, 10.0, 0.3), Vector::new(1.0, -1.0, 0.2)),
+        (Vector::new(0.3, inf, 0.3), Vector::new(0.3, -1.0, 0.2)),
+        (Vector::new(0.3, 10.0, 0.3), Vector::new(0.3, -inf, 0.2)),
+    ];
+
+    // Cast on a thread of its own, so a cast that never returns fails the test.
+    let (sender, answers) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let hits: Vec<_> = rays
+            .iter()
+            .filter_map(|(origin, dir)| {
+                let ray = Ray::new(*origin, *dir);
+                field
+                    .cast_local_ray_and_get_normal(&ray, 1.0e4, true)
+                    .map(|hit| (ray, hit.time_of_impact))
+            })
+            .collect();
+        let _ = sender.send(hits);
+    });
+    let hits = answers
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a cast did not return within 10 s");
+    assert!(hits.is_empty(), "rays reported as hits: {hits:?}");
 }

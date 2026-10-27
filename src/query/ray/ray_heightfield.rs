@@ -147,7 +147,12 @@ impl HeightField {
         let s = ao.perp_dot(seg_dir) / denom;
         let t = ao.perp_dot(ray.dir) / denom;
 
-        if s < 0.0 || s > max_time_of_impact || t < -EDGE_SLACK || t > 1.0 + EDGE_SLACK {
+        // A hit lies within the ray's reach and within the segment's slack, where a parameter that
+        // is not a number never lies.
+        let within_reach = s >= 0.0 && s <= max_time_of_impact;
+        let within_segment = t >= -EDGE_SLACK && t <= 1.0 + EDGE_SLACK;
+
+        if !(within_reach && within_segment) {
             return None;
         }
 
@@ -171,6 +176,11 @@ impl RayCast for HeightField {
         max_time_of_impact: Real,
         _: bool,
     ) -> Option<RayIntersection> {
+        // A ray holding a coordinate that is not finite hits nothing.
+        if !(ray.origin.is_finite() && ray.dir.is_finite()) {
+            return None;
+        }
+
         let ncells = self.num_cells();
         let margin = self.cell_width().abs() * NEIGHBOUR_CELL_MARGIN;
 
@@ -270,7 +280,11 @@ impl HeightField {
                 continue;
             };
 
-            if inter.time_of_impact > max_time_of_impact {
+            // A hit lies within the ray's reach, where a time of impact that is not a number never
+            // lies.
+            let within_reach = inter.time_of_impact <= max_time_of_impact;
+
+            if !within_reach {
                 continue;
             }
 
@@ -291,6 +305,11 @@ impl RayCast for HeightField {
         max_time_of_impact: Real,
         _: bool,
     ) -> Option<RayIntersection> {
+        // A ray holding a coordinate that is not finite hits nothing.
+        if !(ray.origin.is_finite() && ray.dir.is_finite()) {
+            return None;
+        }
+
         let (nrows, ncols) = (self.nrows(), self.ncols());
         let margin_x = self.cell_width().abs() * NEIGHBOUR_CELL_MARGIN;
         let margin_z = self.cell_height().abs() * NEIGHBOUR_CELL_MARGIN;
@@ -367,8 +386,15 @@ impl RayCast for HeightField {
             tested = Some(((first_i, last_i), (first_j, last_j)));
 
             // The ray leaves through the boundary it reaches first, or through both at a grid
-            // vertex.
-            if step_j != 0 && toi_x <= toi_z {
+            // vertex. A ray that leaves through neither has no further cell to reach.
+            let leaves_x = step_j != 0 && toi_x <= toi_z;
+            let leaves_z = step_i != 0 && toi_z <= toi_x;
+
+            if !leaves_x && !leaves_z {
+                return None;
+            }
+
+            if leaves_x {
                 if step_j > 0 {
                     if j + 1 >= ncols {
                         return None;
@@ -382,7 +408,7 @@ impl RayCast for HeightField {
                 }
             }
 
-            if step_i != 0 && toi_z <= toi_x {
+            if leaves_z {
                 if step_i > 0 {
                     if i + 1 >= nrows {
                         return None;
