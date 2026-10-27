@@ -1199,8 +1199,18 @@ impl BvhNode {
         let t1 = (simd_self.mins - ray.origin) * ray.inv_dir;
         let t2 = (simd_self.maxs - ray.origin) * ray.inv_dir;
 
-        let tmin = t1.min(t2);
-        let tmax = t1.max(t2);
+        let mut tmin = t1.min(t2);
+        let mut tmax = t1.max(t2);
+        if ray.parallel.any() {
+            // On an axis the ray does not travel along, it is inside the slab for all of its
+            // length or for none of it.
+            let outside = simd_self.mins.cmpgt(ray.origin) | simd_self.maxs.cmplt(ray.origin);
+            if (outside & ray.parallel).any() {
+                return f32::MAX;
+            }
+            tmin = glamx::Vec3A::select(ray.parallel, glamx::Vec3A::NEG_INFINITY, tmin);
+            tmax = glamx::Vec3A::select(ray.parallel, glamx::Vec3A::INFINITY, tmax);
+        }
         // let tmin = tmin.as_array_ref();
         // let tmax = tmax.as_array_ref();
         let tmin_n = tmin.max_element(); // tmin[0].max(tmin[1].max(tmin[2]));

@@ -12,22 +12,23 @@ pub(super) struct SimdInvRay {
     //       operations for getting the min/max vector element.
     //       We can switch back to `wide` once it's supported.
     pub origin: glamx::Vec3A,
+    /// The inverse of the ray direction on every axis the ray travels along, zero on the others.
     pub inv_dir: glamx::Vec3A,
+    /// The axes the ray does not travel along: its direction is zero there, or so small its
+    /// inverse is not finite. On such an axis the ray stays at its origin coordinate, so it is
+    /// within a box's slab exactly when that coordinate is.
+    pub parallel: glamx::BVec3A,
 }
 
 #[cfg(all(feature = "dim3", feature = "f32"))]
 impl From<Ray> for SimdInvRay {
     fn from(ray: Ray) -> Self {
-        let inv_dir = ray.dir.map(|r| {
-            if r.abs() < Real::EPSILON {
-                r.signum() / Real::EPSILON
-            } else {
-                1.0 / r
-            }
-        });
+        let inv_dir = glamx::Vec3A::ONE / glamx::Vec3A::from([ray.dir.x, ray.dir.y, ray.dir.z]);
+        let parallel = !inv_dir.is_finite_mask();
         Self {
             origin: glamx::Vec3A::from([ray.origin.x, ray.origin.y, ray.origin.z]),
-            inv_dir: glamx::Vec3A::from([inv_dir.x, inv_dir.y, inv_dir.z]),
+            inv_dir: glamx::Vec3A::select(parallel, glamx::Vec3A::ZERO, inv_dir),
+            parallel,
         }
     }
 }
