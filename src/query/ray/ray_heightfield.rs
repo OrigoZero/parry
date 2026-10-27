@@ -193,6 +193,8 @@ impl RayCast for HeightField {
             |k| self.segment_start_x(k),
         );
         let mut t_in = min_t;
+        // The segments the previous step tested, every one of them missed.
+        let mut tested: Option<(usize, usize)> = None;
 
         loop {
             let (toi_x, step) = leave_cell(
@@ -208,6 +210,10 @@ impl RayCast for HeightField {
 
             let mut best = None;
             for k in first..=last {
+                if tested.is_some_and(|(k0, k1)| (k0..=k1).contains(&k)) {
+                    continue;
+                }
+
                 if let Some(hit) = self.cast_ray_on_segment(ray, max_time_of_impact, k) {
                     hit.keep_into(&mut best);
                 }
@@ -220,6 +226,8 @@ impl RayCast for HeightField {
             if t_out >= max_t || step == 0 {
                 return None;
             }
+
+            tested = Some((first, last));
 
             if step > 0 {
                 if j + 1 >= ncells {
@@ -315,10 +323,14 @@ impl RayCast for HeightField {
             |k| self.x_at(k),
         );
         let mut t_in = min_t;
+        // The rows and columns of the cells the previous step tested, every one of them missed.
+        let mut tested: Option<((usize, usize), (usize, usize))> = None;
 
         // Walk the cells under the ray in the order it crosses them. In each, the ray is tested
         // against the cell and against every neighbour it passes within a margin of, so a ray
-        // along a cell edge or through a grid vertex meets every cell sharing it.
+        // along a cell edge or through a grid vertex meets every cell sharing it. Each step tests
+        // the cells of its own the previous step left out, since the walk reaches a step only once
+        // the ray has missed every cell the previous one tested.
         loop {
             let (toi_x, step_j) =
                 leave_cell(ray.origin.x, ray.dir.x, self.x_at(j), self.x_at(j + 1));
@@ -334,7 +346,13 @@ impl RayCast for HeightField {
             let mut best = None;
             for ci in first_i..=last_i {
                 for cj in first_j..=last_j {
-                    self.cast_ray_on_cell(ray, max_time_of_impact, (ci, cj), &mut best);
+                    let seen = tested.is_some_and(|((i0, i1), (j0, j1))| {
+                        (i0..=i1).contains(&ci) && (j0..=j1).contains(&cj)
+                    });
+
+                    if !seen {
+                        self.cast_ray_on_cell(ray, max_time_of_impact, (ci, cj), &mut best);
+                    }
                 }
             }
 
@@ -345,6 +363,8 @@ impl RayCast for HeightField {
             if t_out >= max_t {
                 return None;
             }
+
+            tested = Some(((first_i, last_i), (first_j, last_j)));
 
             // The ray leaves through the boundary it reaches first, or through both at a grid
             // vertex.
