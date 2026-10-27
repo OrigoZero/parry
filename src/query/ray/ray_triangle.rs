@@ -82,6 +82,25 @@ pub fn local_ray_intersection_with_triangle(
     c: Vector,
     ray: &Ray,
 ) -> Option<(RayIntersection, Vector)> {
+    local_ray_intersection_with_triangle_within(a, b, c, ray, 0.0)
+        .map(|(inter, bcoords, _)| (inter, bcoords))
+}
+
+/// Computes the intersection between a triangle and a ray, counting a ray that passes outside the
+/// triangle by at most `slack` (a share of the triangle's barycentric range) as hitting it.
+///
+/// Returns the intersection, the barycentric coordinates of the intersection point, and whether
+/// that point lies inside the triangle itself (every barycentric coordinate in `[0, 1]`). The
+/// slack lets two triangles sharing an edge answer a ray along that edge although rounding puts
+/// the ray a hair outside both.
+#[cfg(feature = "dim3")]
+pub(crate) fn local_ray_intersection_with_triangle_within(
+    a: Vector,
+    b: Vector,
+    c: Vector,
+    ray: &Ray,
+    slack: Real,
+) -> Option<(RayIntersection, Vector, bool)> {
     let ab = b - a;
     let ac = c - a;
 
@@ -105,6 +124,7 @@ pub fn local_ray_intersection_with_triangle(
     let fid = if d < 0.0 { 0 } else { 1 };
 
     let d = d.abs();
+    let margin = slack * d;
 
     //
     // intersection: compute barycentric coordinates
@@ -119,43 +139,43 @@ pub fn local_ray_intersection_with_triangle(
     if t < 0.0 {
         v = -ac.dot(e);
 
-        if v < 0.0 || v > d {
+        if v < -margin || v > d + margin {
             return None;
         }
 
         w = ab.dot(e);
 
-        if w < 0.0 || v + w > d {
+        if w < -margin || v + w > d + margin {
             return None;
         }
 
-        let invd = 1.0 / d;
-        time_of_impact = -t * invd;
+        time_of_impact = -t * (1.0 / d);
         normal = -n.normalize();
-        v *= invd;
-        w *= invd;
     } else {
         v = ac.dot(e);
 
-        if v < 0.0 || v > d {
+        if v < -margin || v > d + margin {
             return None;
         }
 
         w = -ab.dot(e);
 
-        if w < 0.0 || v + w > d {
+        if w < -margin || v + w > d + margin {
             return None;
         }
 
-        let invd = 1.0 / d;
-        time_of_impact = t * invd;
+        time_of_impact = t * (1.0 / d);
         normal = n.normalize();
-        v *= invd;
-        w *= invd;
     }
+
+    let inside = v >= 0.0 && w >= 0.0 && v + w <= d;
+    let invd = 1.0 / d;
+    v *= invd;
+    w *= invd;
 
     Some((
         RayIntersection::new(time_of_impact, normal, FeatureId::Face(fid)),
         Vector::new(-v - w + 1.0, v, w),
+        inside,
     ))
 }
