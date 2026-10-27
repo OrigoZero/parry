@@ -1,5 +1,6 @@
 // A ray cast onto a heightfield hits it wherever it crosses the surface, including a ray through
-// a vertex shared by two segments and a ray on the field's outer border.
+// a vertex shared by two segments and a ray on the field's outer border. A ray holding a
+// coordinate that is not finite hits nothing.
 //
 // Every field here samples a line, so the surface a ray must hit is known in closed form and the
 // expected answer does not depend on the segment test under examination.
@@ -63,4 +64,40 @@ fn an_oblique_ray_through_a_vertex_hits_a_heightfield() {
         ));
     }
     assert_eq!(count_misses(&field, line, &rays, 1.0e-4), 0);
+}
+
+#[test]
+fn a_ray_holding_a_coordinate_that_is_not_finite_misses_a_heightfield() {
+    // The rays would hit the field if each coordinate that is not finite were a finite number.
+    let field = linear_field(17, Vector::new(16.0, 1.0), (0.2, 1.0));
+    let (nan, inf) = (Real::NAN, Real::INFINITY);
+
+    let rays = [
+        (Vector::new(nan, 10.0), Vector::new(0.3, -1.0)),
+        (Vector::new(0.3, nan), Vector::new(0.3, -1.0)),
+        (Vector::new(nan, 10.0), Vector::new(0.0, -1.0)),
+        (Vector::new(0.3, 10.0), Vector::new(nan, -1.0)),
+        (Vector::new(0.3, 10.0), Vector::new(0.3, nan)),
+        (Vector::new(-inf, 10.0), Vector::new(1.0, -1.0)),
+        (Vector::new(0.3, inf), Vector::new(0.3, -1.0)),
+    ];
+
+    // Cast on a thread of its own, so a cast that never returns fails the test.
+    let (sender, answers) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let hits: Vec<_> = rays
+            .iter()
+            .filter_map(|(origin, dir)| {
+                let ray = Ray::new(*origin, *dir);
+                field
+                    .cast_local_ray_and_get_normal(&ray, 1.0e4, true)
+                    .map(|hit| (ray, hit.time_of_impact))
+            })
+            .collect();
+        let _ = sender.send(hits);
+    });
+    let hits = answers
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a cast did not return within 10 s");
+    assert!(hits.is_empty(), "rays reported as hits: {hits:?}");
 }
